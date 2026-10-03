@@ -28,6 +28,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # tutuluyor; iki betigin kriterleri birbirinden kaymasin diye oradan aliniyor.
 from yt_indie_horror_scout import (  # noqa: E402
     DEFAULT_QUERIES,
+    classify_channel,
     focus_label,
     horror_ratio,
     sub_bucket,
@@ -113,6 +114,11 @@ def main():
     ap.add_argument("--horror-ratio", type=float, default=0.45)
     ap.add_argument("--sleep", type=float, default=1.0,
                     help="Kanallar arasi bekleme (saniye) — hiz siniri icin")
+    ap.add_argument("--keep-kinds", default="oynayici,belirsiz",
+                    help="Hangi kanal turleri listeye girsin "
+                         "(oynayici,belirsiz,gelistirici,film,baska_oyun)")
+    ap.add_argument("--report", default="",
+                    help="Elenenleri gerekceleriyle bu CSV'ye yaz")
     ap.add_argument("--exact-subs", action="store_true")
     ap.add_argument("--out", default="indie_horror_kanallar.csv")
     ap.add_argument("--quiet", action="store_true")
@@ -128,6 +134,8 @@ def main():
         print("2/3  Kanal sayfalari okunuyor (abone + handle + son videolar)...",
               file=sys.stderr)
 
+    keep_kinds = {k.strip() for k in args.keep_kinds.split(",") if k.strip()}
+    rejected = []
     rows = []
     seen = set()
     with YoutubeDL(BASE_OPTS) as ydl:
@@ -144,6 +152,17 @@ def main():
                 continue
             ratio = horror_ratio(d["titles"])
             if ratio < args.horror_ratio:
+                rejected.append([d["name"], d["handle"], d["subs"],
+                                 "korku_orani_dusuk", f"%{ratio*100:.0f}"])
+                continue
+
+            kind, why = classify_channel(d["name"], d["handle"], d["titles"],
+                                         d["description"])
+            if kind not in keep_kinds:
+                rejected.append([d["name"], d["handle"], d["subs"], kind, why])
+                if verbose:
+                    print(f"     - {d['name'][:40]:<40} {d['handle']:<24} "
+                          f"ELENDI: {kind} ({why})", file=sys.stderr)
                 continue
 
             rows.append([
@@ -168,6 +187,13 @@ def main():
         w.writerow(["No", "Kanal_Adi", "Handle", "Tahmini_Abone_Araligi",
                     "Dil_Ulke", "Odak_Turu"])
         w.writerows(rows)
+
+    if args.report and rejected:
+        with open(args.report, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["Kanal_Adi", "Handle", "Abone", "Eleme_Nedeni", "Detay"])
+            w.writerows(rejected)
+        print(f"{len(rejected)} elenen kanal -> {args.report}", file=sys.stderr)
 
     print(f"\n{len(rows)} kanal yazildi -> {args.out}", file=sys.stderr)
     if len(rows) < args.target:

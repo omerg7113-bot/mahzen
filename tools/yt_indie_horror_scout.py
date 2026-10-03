@@ -97,6 +97,95 @@ FOCUS_GROUPS = {
 
 TOKEN = re.compile(r"[a-z0-9']+")
 
+# --- Kanal turu tespiti ----------------------------------------------------
+# Korku filtresi "bu kanal korku mu?" sorusunu cozer ama "bu kanal OYNUYOR mu?"
+# sorusunu cozmez. Gelistirici studyolari, kisa film kanallari ve baska bir
+# oyuna adanmis kanallar da korku kelimelerinden gecer. Outreach icin ise
+# yaramazlar: oyununu oynamazlar.
+
+DEV_NAME_WORDS = [
+    "studio", "studios", "interactive", "softworks", "entertainment",
+    "games inc", "game studio", "_dev", "dev ", " dev", "devteam", "team",
+]
+DEV_TITLE_WORDS = [
+    "devlog", "dev log", "development", "announcement trailer", "teaser",
+    "wishlist", "out now on steam", "early access", "patch notes",
+    "kickstarter", "our game", "my game", "release date", "coming soon",
+    "demo is out", "now available",
+]
+FILM_WORDS = [
+    "short film", "kisa film", "animation", "animated", "cgi", "sfm",
+    "movie", "cinematic",
+]
+PLAYER_WORDS = [
+    "gameplay", "playthrough", "let's play", "lets play", "no commentary",
+    "full game", "walkthrough", "part ", "ep.", "episode", "first time",
+    "reaction", "played", "ending explained", "all endings", "oynuyorum",
+    "bolum",
+]
+# Kanal adinda/handle'inda baska bir oyunun adi varsa odak orada demektir.
+OTHER_GAME_WORDS = [
+    "minecraft", "roblox", "fortnite", "gta", "fifa", "valorant", "league of",
+    "among us", "terraria", "sims",
+]
+
+STOPWORDS = {
+    "the", "a", "an", "of", "in", "on", "and", "or", "to", "is", "it", "my",
+    "i", "we", "you", "this", "that", "with", "for", "new", "game", "games",
+    "part", "ep", "episode", "full", "video", "ve", "bir", "bu",
+}
+
+
+def _repetition(titles):
+    """Basliklarin kacinda ayni anlamli kelime geciyor (0-1).
+
+    Gelistirici kanallari tek bir oyunun adini her baslikta tekrarlar;
+    oynayici kanallari her videoda baska bir oyundan soz eder.
+    """
+    if len(titles) < 5:
+        return 0.0
+    doc_freq = {}
+    for t in titles:
+        for w in set(TOKEN.findall(t.lower())):
+            if w in STOPWORDS or len(w) < 4 or w in HORROR_WORDS:
+                continue
+            doc_freq[w] = doc_freq.get(w, 0) + 1
+    if not doc_freq:
+        return 0.0
+    return max(doc_freq.values()) / len(titles)
+
+
+def classify_channel(name, handle, titles, description):
+    """('oynayici'|'gelistirici'|'film'|'baska_oyun'|'belirsiz', gerekce)."""
+    ident = f"{name} {handle}".lower()
+    blob = " ".join(titles).lower()
+    desc = (description or "").lower()
+
+    for w in OTHER_GAME_WORDS:
+        if w in ident:
+            return "baska_oyun", f"ad/handle '{w}' iceriyor"
+
+    name_dev = [w for w in DEV_NAME_WORDS if w in ident]
+    title_dev = sum(blob.count(w) for w in DEV_TITLE_WORDS)
+    desc_dev = sum(desc.count(w) for w in DEV_TITLE_WORDS)
+    rep = _repetition(titles)
+    player_hits = sum(blob.count(w) for w in PLAYER_WORDS)
+    film_hits = sum(blob.count(w) for w in FILM_WORDS) +         sum(1 for w in ("film", "films") if w in ident) * 3
+
+    if name_dev and player_hits < 3:
+        return "gelistirici", f"ad/handle '{name_dev[0]}' + oynayici sinyali zayif"
+    if rep >= 0.6 and player_hits < 5:
+        return "gelistirici", f"basliklarin %{rep*100:.0f}'inde ayni oyun adi"
+    if (title_dev + desc_dev) >= 4 and player_hits < 4:
+        return "gelistirici", "devlog/trailer/wishlist dili baskin"
+    if film_hits >= 4 and player_hits < 3:
+        return "film", "kisa film/animasyon sinyali baskin"
+    if player_hits >= 3:
+        return "oynayici", f"{player_hits} oynayici sinyali"
+    return "belirsiz", "sinyal yetersiz — elle bak"
+
+
+
 
 def api_get(endpoint, params, key, quota_box, cost):
     """Tek bir API cagrisi. Kota sayacini artirir, hatayi anlasilir sekilde yukseltir."""
@@ -246,6 +335,11 @@ def main():
                     help="Sorgu basina taranacak video sayisi (50 = 100 birim)")
     ap.add_argument("--horror-ratio", type=float, default=0.45,
                     help="Son videolarin en az bu orani korku olmali (0-1)")
+    ap.add_argument("--keep-kinds", default="oynayici,belirsiz",
+                    help="Hangi kanal turleri listeye girsin "
+                         "(oynayici,belirsiz,gelistirici,film,baska_oyun)")
+    ap.add_argument("--report", default="",
+                    help="Elenenleri gerekceleriyle bu CSV'ye yaz")
     ap.add_argument("--exact-subs", action="store_true",
                     help="Bant yerine tam abone sayisini yaz")
     ap.add_argument("--out", default="indie_horror_kanallar.csv")
@@ -266,6 +360,8 @@ def main():
     verbose = not args.quiet
     quota = {"used": 0}
 
+    keep_kinds = {k.strip() for k in args.keep_kinds.split(",") if k.strip()}
+    rejected = []
     seen_handles = set()
     rows = []
     if args.resume and os.path.exists(args.out):
@@ -329,6 +425,17 @@ def main():
         titles = recent_titles(key, quota, uploads)
         ratio = horror_ratio(titles)
         if ratio < args.horror_ratio:
+            rejected.append([sn.get("title", ""), handle, subs,
+                             "korku_orani_dusuk", f"%{ratio*100:.0f}"])
+            continue
+
+        kind, why = classify_channel(sn.get("title", ""), handle, titles,
+                                     sn.get("description", ""))
+        if kind not in keep_kinds:
+            rejected.append([sn.get("title", ""), handle, subs, kind, why])
+            if verbose:
+                print(f"     - {sn.get('title','')[:40]:<40} {handle:<24} "
+                      f"ELENDI: {kind} ({why})", file=sys.stderr)
             continue
 
         country = sn.get("country", "")
@@ -356,6 +463,13 @@ def main():
         w.writerow(["No", "Kanal_Adi", "Handle", "Tahmini_Abone_Araligi",
                     "Dil_Ulke", "Odak_Turu"])
         w.writerows(rows)
+
+    if args.report and rejected:
+        with open(args.report, "w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(["Kanal_Adi", "Handle", "Abone", "Eleme_Nedeni", "Detay"])
+            w.writerows(rejected)
+        print(f"{len(rejected)} elenen kanal -> {args.report}", file=sys.stderr)
 
     print(f"\n{len(rows)} kanal yazildi -> {args.out}", file=sys.stderr)
     print(f"Harcanan kota: ~{quota['used']} / 10.000 birim", file=sys.stderr)
