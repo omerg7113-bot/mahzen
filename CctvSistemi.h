@@ -176,6 +176,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Cctv|Yazi")
 	TObjectPtr<UFont> OsdFontu;
 
+	/** Varsayılan font bir kez denendi mi (başarısızsa her yakalamada log basmasın). */
+	bool bOsdFontuDenendi = false;
+
 	// --- REC göstergesi ---
 
 	UPROPERTY(EditAnywhere, BlueprintReadWrite, Category = "Cctv|Yazi")

@@ -547,6 +547,12 @@ bool ACctvSistemi::YakalamaGerekliMi() const
 
 void ACctvSistemi::Yakala()
 {
+	// Ekransiz (dedicated) sunucuda cizilecek bir sey yok.
+	if (IsNetMode(NM_DedicatedServer))
+	{
+		return;
+	}
+
 	// Senkron kaybi / kayit tekrari / kesinti sirasinda GORUNTU DONAR:
 	// yeni kare yakalamiyoruz, Render Target'ta son kare kaliyor.
 	if (SenkronKalan > 0.0f || DondurmaKalan > 0.0f || KesintiKalan > 0.0f)
@@ -588,10 +594,12 @@ void ACctvSistemi::KanalYazisiniCiz()
 		return;
 	}
 
-	if (!OsdFontu)
+	if (!OsdFontu && !bOsdFontuDenendi)
 	{
-		// Monospace: CCTV yazisinin karakteri bundan geliyor.
-		OsdFontu = LoadObject<UFont>(nullptr, TEXT("/Engine/EngineFonts/DroidSansMono"));
+		// Monospace: CCTV yazisinin karakteri bundan geliyor. Bulunamazsa her
+		// yakalamada yeniden denenip log basilmasin diye yalnizca bir kez denenir.
+		bOsdFontuDenendi = true;
+		OsdFontu = LoadObject<UFont>(nullptr, TEXT("/Engine/EngineFonts/DroidSansMono"), nullptr, LOAD_NoWarn);
 	}
 	UFont* YaziTipi = OsdFontu ? OsdFontu.Get() : GEngine->GetLargeFont();
 	if (!YaziTipi)
@@ -835,7 +843,7 @@ void ACctvSistemi::Tick(float DeltaTime)
 
 	// Yakalama yalnizca gerektiginde donsun (monitör kapali veya oyuncu uzak
 	// oldugunda GPU'da hic is yapmasin).
-	const bool bGerekli = YakalamaGerekliMi();
+	const bool bGerekli = !IsNetMode(NM_DedicatedServer) && YakalamaGerekliMi();
 	if (bGerekli != bYakalamaAcik)
 	{
 		YakalamaZamanlayicisi(bGerekli);
