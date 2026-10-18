@@ -599,7 +599,7 @@ void ACctvSistemi::KanalYazisiniCiz()
 		// Monospace: CCTV yazisinin karakteri bundan geliyor. Bulunamazsa her
 		// yakalamada yeniden denenip log basilmasin diye yalnizca bir kez denenir.
 		bOsdFontuDenendi = true;
-		OsdFontu = LoadObject<UFont>(nullptr, TEXT("/Engine/EngineFonts/DroidSansMono"), nullptr, LOAD_NoWarn);
+		OsdFontu = LoadObject<UFont>(nullptr, TEXT("/Engine/EngineFonts/DroidSansMono.DroidSansMono"), nullptr, LOAD_NoWarn);
 	}
 	UFont* YaziTipi = OsdFontu ? OsdFontu.Get() : GEngine->GetLargeFont();
 	if (!YaziTipi)
